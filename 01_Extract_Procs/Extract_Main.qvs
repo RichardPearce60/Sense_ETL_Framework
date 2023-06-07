@@ -1,0 +1,226 @@
+/** Better Comments VS Code Extension
+* Comment
+** Highlighted
+* ! Deprecated method
+* ? Question
+* TODO: Reminder
+
+    Overall, the script extracts data based on the application name, loads field information from a CSV file, 
+    performs extraction logic for SAGE or other systems, stores the extracted data in a QVD file, and cleans up variables used during the process.
+
+    This Qlik Sense code is a script for data extraction and processing. Here is a summary of the code:
+
+    1. The script begins by extracting information from the application name. It separates the ETL type, source system, and table name based on underscores in the application name.
+
+    2. The script includes additional files and subroutines necessary for the extraction process.
+
+    3. It reads INI files for configuration. It checks if the files exist and if so, sets parameters accordingly.
+
+    4. It loads fields from a CSV file specific to the application. If the CSV file exists, it loads the fields into a table called "Fields." It also generates a field list string for later use.
+
+    5. If the source system is SAGE, it performs specific extraction steps for SAGE data. It checks if the extraction should be performed for all companies or a specific company. It loads company information from an Excel file and loops through each company. It establishes a connection to each company using a specific connection string and extracts data from the specified table.
+
+    6. If the source system is not SAGE, it can be assumed that the script would contain additional extraction logic specific to other systems.
+
+    7. The extracted data is stored in a QVD file specific to the application and the table is dropped from memory.
+
+    8. The script cleans up variables used during the extraction process.
+
+*/
+
+
+Trace Running: Extract General...;
+Trace Application Name: $(vApplicationName);
+
+//* Left until first underscore Extract Type
+//* Left until Second underscore Source System
+//* Remainder = table / view name (Exact, Caps, etc)
+LET vETLType	    = left(vApplicationName,index(vApplicationName,'_')-1);
+LET vSourceSystem  	= mid(vApplicationName,index(vApplicationName,'_')+1,index(vApplicationName,'_',2)-index(vApplicationName,'_',1)-1);
+LET vTableName 		= mid(vApplicationName,index(vApplicationName,'_',2)+1);
+
+Trace ETL Type: $(vETLType);
+Trace Source System: $(vSourceSystem);
+Trace Table Name: $(vTableName);
+
+
+Trace Include ALL Files;
+$(Must_Include='lib://Acorn_Insights/00_Shared/Include_Subroutines/ALL_Includes.qvs')
+
+
+LET vAuditLog_Start = TimeStamp(Now());
+
+
+Trace Read INI Files: config, system and table where avaibible;
+for each _sFileName in  'lib://Acorn_Insights/01_Extract_Procs/# config.ini','lib://Acorn_Insights/01_Extract_Procs/## ' & vSourceSystem & '.ini','lib://Acorn_Insights/01_Extract_Procs/' & vApplicationName & '.ini'
+    call FileExists( _sFileName, bFileExists,0);
+    If not isnull(bFileExists) Then 
+        Trace Reading INI File '$(_sFileName)';
+        call SetParameters( _sFileName)
+    End iF
+next _sFileName
+
+//call DropConfigTables;
+
+
+
+Trace Load Fields from csv;
+Let _sFileName = 'lib://Acorn_Insights/01_Extract_Procs/' & vApplicationName & '.csv';
+call FileExists( _sFileName, bFileExists,0);
+If not isnull(bFileExists) Then 
+    Trace Loading Fields from '$(_sFileName)';
+
+    Fields:
+    LOAD
+        "Field"
+    FROM ['$(_sFileName)']
+    (txt, codepage is 28591, embedded labels, delimiter is '\t', msq);  
+
+    let vFieldList = '';
+    let iRowCount = NoOfRows('Fields');
+    if iRowCount > 0 then
+        for iCurrentRow = 0 to iRowCount-1	
+            let vFieldList = vFieldList & '[' & Peek('Field',iCurrentRow,'Fields') & '],';
+        next iCurrentRow
+        let vFieldList = left(vFieldList,len(vFieldList)-1);
+    Else
+        trace Error: '$(_sFileName)' Returned no records;
+        Exit Scripts; // Force an error!  
+    end if
+Else
+    Trace No CSV, Loading all fields;
+    let vFieldList = '*';
+End iF
+
+
+/**
+    ** If we're loading from SAGE we have to read through the companies
+*/
+
+if upper(vSourceSystem) = 'SAGE' then 
+
+// ******************************************************************************
+// ******************************************************************************
+//                              SAGE EXTRACT
+// ******************************************************************************
+// ******************************************************************************
+    trace Loading from sage....;
+
+    if upper(FromConnection.COMPANY) = 'ALL' then
+        let vWhere = 'not isnull([Co Number])';
+    Else
+        Let vWhere = 'Match([Co Number],$(FromConnection.COMPANY))' ;
+    end if 
+
+    Trace Load Companyies;
+    Let _sFileName = 'lib://Acorn_Insights/00_Shared/Company Mapping_v0.02.xlsx'; //todo promote to ini
+    call FileExists( _sFileName, bFileExists,0);
+
+    If not isnull(bFileExists) Then 
+        Trace Loading Companies from '$(_sFileName)';
+        
+        Companies:
+        // LOAD
+        //     "Co Number",
+        //     "Company Name"
+        // FROM [$(_sFileName)]
+        // (ooxml, embedded labels, table is [Company Mapping Active])
+        // where 
+        // $(vWhere)
+        // ;
+
+        //! Temp Move to the old workbook to test old company mapping sheet...
+        LOAD  
+            "Co Number",
+            "Company Name"   
+        FROM [lib://Excel Extract (acornhomes_bobink)/Sage Company Mapping.xlsx]
+        (ooxml, embedded labels, table is Sheet2)
+        Where $(vWhere);
+
+
+
+
+        let iRowCount = NoOfRows('Companies');
+        if iRowCount > 0 then
+            Trace Looping through the SAGE companies;
+            set ErrorMode=0; // Turn off Errors to catch bad connections
+
+            for  iCurrentRow = 0 to iRowCount-1	
+                let vConnectionString = 'COMPANY.'& num(peek('Co Number',iCurrentRow,'Companies'),'000') &' (acornhomes_bobink)'; 
+                let vCompany = num(peek('Co Number',iCurrentRow,'Companies'),'000');  //*TODO < Move this above the previous line 
+
+                LIB CONNECT TO '$(vConnectionString)';
+                let vError = ScriptError;
+
+                if vError = ''  then
+                    trace Loading from company $(vConnectionString).;
+                    EXTRACT:
+                    Load * 
+                         ,'COMPANY.'&$(vCompany) as CompanyNo
+                         ;
+                    SQL SELECT $(vFieldList)
+                    FROM '$(vTableName)';
+                end if
+            next iCurrentRow
+
+            set ErrorMode=1; // Turn back on Error Mode
+        Else
+            trace Error: '$(_sFileName)' Returned no records;
+            Exit Scripts; // Force an error!  
+
+            
+        end if
+    end if 
+
+Else
+
+// ******************************************************************************
+// ******************************************************************************
+//                              NOT SAGE EXTRACT
+// ******************************************************************************
+// ******************************************************************************
+    trace Loading from Not sage....;
+
+    if upper(FromConnection.TYPE)='EXCEL' then
+        trace Loading from EXCEL....;
+
+        EXTRACT:
+        LOAD $(vFieldList)
+        FROM [$(FromConnection.LIB)$(vTableName).$(FromConnection.FILE_EXT)]
+        (ooxml, embedded labels, header is $(FromConnection.HEADER) lines, table is '$(FromConnection.TABLE)');
+
+
+
+    elseif upper(FromConnection.TYPE)='SQL' then
+        trace Loading from SQL....;
+
+        LIB CONNECT TO '$(FromConnection.LIB)';
+
+        EXTRACT:
+        SQL SELECT $(vFieldList)
+        FROM $(vTableName);
+
+    End if
+
+end if
+
+
+
+// Store and detete table
+Store EXTRACT into [$(ToConnection.LIB)$(vApplicationName).qvd];
+drop table EXTRACT;
+
+// Logging
+CALL AuditLog ('$(vCycleStart)','$(vAuditLog_Application)','File','Load','$(FromConnection.LIB).$(vTableName)','$(vAuditLog_Start)');
+CALL AuditLog ('$(vCycleStart)','$(vAuditLog_Application)','File','Store','$(ToConnection.LIB)$(vApplicationName).qvd','$(vAuditLog_Start)');
+CALL StoreAuditLog;
+
+//Clean Up
+_sFileName = ;
+bFileExists = ;
+vFieldList = ;
+iRowCount=;
+iCurrentRow=;
+vConnectionString=;
+vWhere = ;
+vError = ;
