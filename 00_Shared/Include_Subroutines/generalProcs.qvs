@@ -1,0 +1,25 @@
+TRACE generalProcs.qvs included;
+
+
+
+
+/**
+** File Exists checks a file is there and returns True or False
+*  You can set the behvoiur to exit script or continue
+* 
+	_sFileName = text, full file path
+	bFileExists = returns true or false
+	_sExitScript = if true and no file found script will force an error and exit
+*/
+Sub FileExists( _sFileName, bFileExists,_sExitScript);
+    LET bFileExists = filetime(_sFileName);
+	//Trace Checking $(_sFileName) Exists $(bFileExists). $(_sExitScript)..; 
+    If isnull(bFileExists) Then 
+		Trace ERROR: File: $(_sFileName) does not exist;
+		if _sExitScript then
+			Exit Scripts; // Force an error!
+		End if
+	End If 
+End Sub
+
+

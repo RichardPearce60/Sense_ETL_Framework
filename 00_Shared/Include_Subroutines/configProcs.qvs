@@ -1,0 +1,357 @@
+/************************************************************************************************************************************
+***   Configuration Manager 
+*************************************************************************************************************************************
+Sub procedures for reading in configuration files and setting parameters.
+
+The INI file format is an informal standard for configuration files for some computing platforms or software. INI files are simple text files with a basic structure composed of sections, properties, and values.
+The name "INI file" comes from the commonly used filename extension .INI, which stands for "initialization".
+
+You can pass any filename to the ReadIniFile() procedure.
+This means you could use an extension other than .ini. 
+You could use .cfg, .conf, .config, or .txt.
+
+You can read about INI files here:
+https://en.wikipedia.org/wiki/INI_file
+
+
+Keys (properties)
+-----------------
+The basic element contained in an INI file is the key or property. Every key has a name and a value, delimited by an equals sign (=). The name appears to the left of the equals sign.
+
+key=value
+
+Sections
+--------
+Keys may (but need not) be grouped into arbitrarily named sections. The section name appears on a line by itself, in square brackets ([ and ]). All keys after the section declaration are associated with that section. There is no explicit "end of section" delimiter; sections end at the next section declaration, or the end of the file. Sections may not be nested.
+
+[section]
+a=a
+b=b
+;c=c    		(commented out with a semi-colon)
+#c=c    		(commented out with a hash symbol)
+d=a,b,c,d		(can be a comma-separated list of values)
+
+
+Usage
+-----
+1. Call InitParamsTable()
+2. Call ReadIniFile(<configFile>)
+3. (optional) Call SetParameters( <yourConfigFile>)
+
+InitParamsTable() creates an empty table where the rows from the config file will be loaded.  No parameters are passed to the procedure.  This is done so that subsequent LOAD statements will append the table without a CONCATENATE statement.
+
+The ReadIniFile( <configFile>) procedure will load the [raw_config] table with the rows from the <configFile>.
+<configFile> is a fully-qualified path to your file, starting with "lib://" and including the extension (if there is one).
+
+For example: "lib://myDataConnection/config.ini"
+
+Once loaded, the SetParameters() function can be called to set variables (in Qlik) for each key-value pair.
+If a key is in a section, the variable will be named section.key, otherwise it will just be key.
+/************************************************************************************************************************************/
+
+
+
+/**********************************************************************
+***   Initiate the Params table.
+***********************************************************************
+Initialize the [raw_config] and [config] tables.  [raw_config] is used to see exactly what was loaded from file, including blank rows.  Each row is tagged with the file name.
+
+[raw_config]
+RawFileName 	- the fully-qualified path of the <configFile> that was read in.  Includes the "lib://" prefix and extension.
+RawContent 		- the content that was read in from each row.  File is read in as a single field (no delimiters).
+IsSectionHeader	- [True | False] depending on the presence of the '[' character.
+RawSection		- If [IsSectionHeader]=True then this field will contain the section name (between the square brackets).
+
+
+The [config] table will have the final configurations.
+
+[config]
+File 			- Same as [raw_config].[RawFileName]
+Section			- The section name.  Present (in every row) for key-value pairs occurring in a section.
+Content 		- Trimmed [RawContent] (from the file).
+ContainsEquals	- [True | False] depending on the presence of an '=' sign.
+ContainsComma	- [True | False] depending on the presence of a comma (',').
+ContentType 	- [Parameter | List | Unknown].  Note: Only parameters and lists make it to the [config] table.
+Key				- If [ContainsEquals]=True, anything to the left of the equals sign.
+Value			- If [ContainsEquals]=True, anything to the right of the equals sign.
+FirstChar		- ASCII value of the first character of [Value].
+IsQuoted		- [True | False] depending on the presence of a single or double quote character in the first position.
+
+Note: [raw_config].[RawSection] is only filled in for the header records, whereas each row in the [config] table will have [Section] (if applicable).
+**********************************************************************/
+TRACE configProcs.qvs included;
+
+Sub InitConfigTables
+	If SERVER.DEBUG Then
+		TRACE Initializing config and raw_config tables...;
+	End If
+
+	If IsNull( TableNumber( 'raw_config')) Then 
+		raw_config:
+		LOAD
+			*
+		INLINE [RawFileName,RawContent,IsSectionHeader,RawSection
+		];
+	End If
+	
+	If IsNull( TableNumber( 'config')) Then 
+		config:
+		LOAD
+			*
+		INLINE [File,Section,Content,ContainsEquals,ContainsComma,SectionIsVars,SectionIsFunc,ContentType,Key,Value,FirstChar,IsQuoted
+		];
+	End If 
+End Sub
+
+
+/******************************************************************************
+**   Read config.ini file
+******************************************************************************/
+Sub ReadIniFile( _sFileName)
+	If SERVER.DEBUG Then
+		TRACE ReadIniFile( $(_sFileName)) has been called;
+	End If
+	
+	Call FileExists( _sFileName, bFileExists,True);
+	// If NOT bFileExists Then 
+	// 	TRACE ERROR: Configuration file '$(_sFileName)' does not exist;
+	// 	Exit Script;
+	// End If 
+	
+	
+	If SERVER.DEBUG Then
+		TRACE Loading file $(_sFileName) to raw_config table...;
+	End If
+	
+	raw_config:
+	LOAD
+		[RawFileName]
+		,[RawContent]
+		,[IsSectionHeader]
+		,If( [IsSectionHeader], TextBetween( [RawContent], '[', ']')) AS [RawSection]
+	;
+	LOAD
+		[RawFileName]
+		,[RawContent]
+		,If( Left( Trim( [RawContent]), 1)='[', True(), False()) AS [IsSectionHeader]
+	;
+	LOAD
+		[RawFileName]
+		,[RawContent]
+	;
+	LOAD
+		'$(_sFileName)' AS [RawFileName]
+		,"@1:n" AS [RawContent]
+	FROM 
+		[$(_sFileName)]
+		(fix, codepage is 1252, no labels);
+	;
+
+	If SERVER.DEBUG Then
+		TRACE Loading the tmp_config table (and filling the Section field)...;
+	End If
+
+	
+	
+	// Get the section header to repeat on every row within the section
+	tmp_content:
+	LOAD
+		[RawFileName] AS [File]
+		,Trim( [RawContent]) AS [Content]
+		,[IsSectionHeader]
+		,If( IsNull( [RawSection]), Peek('NewSection'), [RawSection]) as [NewSection]
+	RESIDENT 
+		raw_config
+	WHERE
+		[RawFileName]='$(_sFileName)'
+		AND Left( Trim( [RawContent]), 1)<>'#' 
+		AND Left( Trim( [RawContent]), 1)<>';'
+		AND Len( Trim( [RawContent]))>0
+	;
+
+	If SERVER.DEBUG Then
+		TRACE Loading config table...;
+	End If
+
+	concatenate(config)
+	LOAD
+		[File]
+		,[Section]
+		,[Content]
+		,[ContainsEquals]
+		,[ContainsComma]
+		,[SectionIsVars]
+		,[SectionIsFunc]
+		,[ContentType]
+		,[Key]
+		//,If( [IsQuoted] , Replace( [Value], Chr( [FirstChar]), ''), [Value]) AS [Value]
+		,If( [IsQuoted] and Not([SectionIsVars]) and Not([SectionIsFunc]), Replace( [Value], Chr( [FirstChar]), ''), [Value]) AS [Value]
+		,[FirstChar]
+		,[IsQuoted]
+	;
+	LOAD
+		[File]
+		,[Section]
+		,[Content]
+		,[ContainsEquals]
+		,[ContainsComma]
+		,[SectionIsVars]
+		,[SectionIsFunc]
+		,[ContentType]
+		,[Key]
+		,[Value]
+		,[FirstChar]
+		,If( [FirstChar]=34 OR [FirstChar]=39, True(), False()) AS [IsQuoted]
+	;
+	LOAD
+		[File]
+		,[Section]
+		,[Content]
+		,[ContainsEquals]
+		,[ContainsComma]
+		,[SectionIsVars]
+		,[SectionIsFunc]
+		,[ContentType]
+		,[Key]
+		,[Value]
+		,Ord( [Value]) AS [FirstChar] 
+	;
+	LOAD
+		[File]
+		,[Section]
+		,[Content]
+		,[ContainsEquals]
+		,[ContainsComma]
+		,[SectionIsVars]
+		,[SectionIsFunc]
+		,If( [ContainsEquals], 'Parameter', If( [ContainsComma], 'List', 'Unknown')) AS [ContentType]
+		,If( [ContainsEquals], Trim( SubField( [Content], '=', 1))) AS [Key]
+		,If( [ContainsEquals], Trim(Right(  [Content] , len( [Content]) - Index( [Content], '=')))) AS [Value]
+	;
+	LOAD
+		[File]
+		,[NewSection] AS [Section]
+		,[Content]
+		,If( mixmatch( [NewSection],'VARIABLES','VARIABLE')>0, True(), False()) AS [SectionIsVars]
+		,If( mixmatch( [NewSection],'FUNCTIONS','FUNCTION')>0, True(), False()) AS [SectionIsFunc]
+		,If( Index( [Content], '=')>0, True(), False()) AS [ContainsEquals]
+		,If( Index( [Content], ',')>0, True(), False()) AS [ContainsComma]
+	RESIDENT
+		tmp_content
+	WHERE
+		NOT [IsSectionHeader]
+		// [ContentType]<>'Unknown'
+		// AND [ContentType]<>'SectionHeader'
+	;
+
+	If SERVER.DEBUG Then
+		TRACE Dropping the tmp_content table...;
+	End If
+	
+	DROP TABLE tmp_content;
+
+End Sub
+
+Sub SetParameters( _sFile)
+	
+	Call InitConfigTables;
+	Call ReadIniFile( _sFile);	
+	
+	sTableName = 'config';
+	
+	iRowCount = NoOfRows( sTableName) -1;
+
+	For iCurrentRow = 0 To iRowCount
+
+		// Just want to deal with the rows from the file that was passed
+		sFile = Trim( Peek( 'File', iCurrentRow, sTableName));
+		sContentType = Trim( Peek( 'ContentType', iCurrentRow, sTableName));
+		sContainsComma = Trim( Peek( 'ContainsComma', iCurrentRow, sTableName));
+		sSectionIsVars = Trim( Peek( 'SectionIsVars', iCurrentRow, sTableName));
+		sSectionIsFunc = Trim( Peek( 'SectionIsFunc', iCurrentRow, sTableName));
+		If sFile = _sFile AND sContentType='Parameter' Then
+		
+			// read the current row's content & section
+			sParameter 	= Peek( 'Key', iCurrentRow, sTableName);
+			sValue 	= Peek( 'Value', iCurrentRow, sTableName);
+			sSection = Trim( Peek( 'Section', iCurrentRow, sTableName));
+
+			// if the section is null
+			If IsNull( sSection) Then
+				sSection = '';
+			Else
+				sSection = sSection & '.';
+			End If
+
+			// When '1' should be True()
+			If sValue='0b0' Then 
+				sValue = False();
+			ElseIf sValue='0b1' Then 
+				sValue = True();
+			End If
+
+			TRACE sContainsComma=$(sContainsComma);
+			
+			If sContainsComma='True' and sSectionIsFunc='False' Then 
+				iTotalElements = SubStringCount(sValue, ',')+1;
+				cElement = ''
+				For iElement = 1 to iTotalElements
+					sElement = SubField(sValue, ',', iElement);
+					if iElement = 1 then
+					cElement = Chr(39) & sElement & Chr(39)
+					Else 
+					cElement = cElement & Chr(44) & Chr(39) & sElement & Chr(39)
+					End if
+					// Quote the element
+					//sValue = Replace( sValue, sElement, Chr(39) & sElement & Chr(39));
+					
+				Next
+				TRACE cElement is $(cElement);
+				sValue = cElement; 
+			End If 
+
+			// Set the variable
+			[$(sSection)$(sParameter)] = sValue;
+						
+			If sSectionIsFunc='True' Then 
+				SET [$(sSection)$(sParameter)] = $($(sSection)$(sParameter));
+				LET [$(sSection)$(sParameter)] =  Replace(Replace($(sSection)$(sParameter),'@','$'),'`',chr(39));
+			end if 
+
+
+				
+			If SERVER.DEBUG THEN
+				TRACE $(sSection)$(sParameter) = '$($(sSection)$(sParameter))';
+			End If
+		End If
+	Next
+
+	sFile = ;
+	sValue = ;
+	sSection = ;
+	sElement = ;
+	sContentType = ;
+	sContainsComma = ;
+	sSectionIsVars = ;
+	sSectionIsFunc = ;
+	sParameter = ;
+	sTableName = ;
+	iCurrentRow = ;
+	iRowCount = ;
+	iTotalElements = ;
+	iElement = ;
+	cElement =;
+
+
+End Sub
+
+Sub DropConfigTables
+	If NOT IsNull( TableNumber( 'raw_config')) Then 
+		DROP TABLE raw_config;
+	End If 
+	
+	If NOT IsNull( TableNumber( 'config')) Then 
+		DROP TABLE config;
+	End If
+End Sub
+

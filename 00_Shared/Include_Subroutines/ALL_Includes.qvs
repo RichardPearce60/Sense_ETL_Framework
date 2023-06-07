@@ -1,0 +1,5 @@
+TRACE ALL_Includes.qvs included;
+$(Must_Include='lib://Acorn_Insights/00_Shared/Include_Subroutines/Main_Section.qvs');
+$(Must_Include='lib://Acorn_Insights/00_Shared/Include_Subroutines/configProcs.qvs');
+$(Must_Include='lib://Acorn_Insights/00_Shared/Include_Subroutines/generalProcs.qvs');
+$(Must_Include='lib://Acorn_Insights/00_Shared/Include_Subroutines/logging.qvs');

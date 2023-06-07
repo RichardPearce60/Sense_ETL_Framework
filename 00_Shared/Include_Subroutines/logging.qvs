@@ -1,0 +1,87 @@
+/*************************************************************************************************
+AUDIT LOGGING
+
+Creates a subroutine to be called during key touch points during the script
+
+Examples:
+Loading and storing data:
+CALL AuditLog ('$(vCycleStart)','$(vAuditLog_Application)','File','Load','lib://Acorn_Insights/04_Transform_Data/Transform_Sage_AUDIT_JOURNAL.qvd','$(vAuditLog_Start)');
+CALL AuditLog ('$(vCycleStart)','$(vAuditLog_Application)','File','Store','lib://Acorn_Insights/04_Transform_Data/Transform_Sage_AUDIT_JOURNAL.qvd','$(vAuditLog_Start)');
+
+
+
+
+
+
+*/
+
+TRACE logging.qvs included;
+
+
+LET vCycleStart = TimeStamp(Now());
+LET vAuditLog_Application = vApplicationName; // – Unique to each QVW
+
+
+
+
+SUB AuditLog (vCycleStart,vAuditLog_Application,vAuditLog_AttributeType,vAuditLog_AttributeName,vAuditLog_AttributeValue,vAuditLog_Start)
+
+        AuditLog:
+        LOAD
+
+        //What is that start time of this whole cycle? Groups various QVD builders together for reporting.
+        '$(vCycleStart)'        AS     AuditLog_CycleStartTime
+
+        //ID for row written during this script execution. Used for sorting in analysis dashboard
+        ,RowNo()          AS     AuditLog_CycleRowID
+
+        //What app is this (e.g. PnL Builder)?
+        ,'$(vAuditLog_Application)'      AS     AuditLog_Application
+
+        //What type of audit record is this? E.g. “Duration” “Variable” or “DB FACT Row Count”
+        ,'$(vAuditLog_AttributeType)'     AS     AuditLog_AttributeType
+
+        //What type of attribute are we about to log an audit record for? E.g. Table Name, Tab Name or Variable Name
+        ,'$(vAuditLog_AttributeName)'     AS     AuditLog_AttributeName
+
+        //What is the specific value for the AttributeName above? E.g. If its a variable it will be the value of the variable
+        ,'$(vAuditLog_AttributeValue)'             AS     AuditLog_AttributeValue
+
+        //This will have been set at the start of the script section
+        ,'$(vAuditLog_Start)'       AS     AuditLog_Start
+
+        //Get a timestamp for right now
+        ,TimeStamp(Now())        AS     AuditLog_End
+
+        //End-Start = Duration. Saves doing it in a UI later. Converted to seconds.
+        ,Num(Now()-'$(vAuditLog_Start)')*24*60*60  AS     AuditLog_Duration
+
+        AutoGenerate 1;
+
+
+
+END SUB;
+
+
+
+sub StoreAuditLog
+
+    //**************Store Audit Log*****************
+    IF noOfRows('AuditLog') <> null() then
+
+    LET QVDDateAppendix   = TimeStamp(Now(),'YYYYMM');
+
+    if not isnull(filetime('lib://Acorn_Insights\07_Logs\$(vAuditLog_Application)_$(QVDDateAppendix).qvd')) Then // Check the file exists
+
+        Concatenate(AuditLog)
+        LOAD * From [lib://Acorn_Insights\07_Logs\$(vAuditLog_Application)_$(QVDDateAppendix).qvd]  (QVD);
+
+    ENDIF
+
+    STORE * FROM [AuditLog] INTO [lib://Acorn_Insights\07_Logs\$(vAuditLog_Application)_$(QVDDateAppendix).qvd]  ;
+
+    DROP Table [AuditLog];
+
+    ENDIF
+
+End sub
