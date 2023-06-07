@@ -1,0 +1,121 @@
+/** Better Comments VS Extension
+* Comment
+** Highlighted
+* ! Deprecated method
+* ? Question
+* TODO: Reminder
+
+    Overall, the script extracts information from the application name, reads INI files for configuration, sanitizes and maps field names, 
+    performs data transformation using a QVS file, renames fields using a field name mapping table, and stores the transformed data in a QVD file.
+
+    This Qlik Sense script performs data transformation on an extracted file. Here is a summary of the code:
+
+    1. The script starts by extracting information from the application name. It separates the ETL type, source system, and table name based on underscores in the application name.
+
+    2. The script includes additional files and subroutines necessary for the transformation process.
+
+    3. It reads INI files for configuration. It checks if the files exist and if so, sets parameters accordingly.
+
+    4. The script loads a global field name mapping table from a CSV file.
+
+    5. Remaining field names are sanitized by replacing underscores with spaces and capitalizing the field names.
+
+    6. The sanitized field names are mapped using the previously loaded mapping table.
+
+    7. The script loads and transforms the extracted data from a QVD file. It includes any standard transformation logic defined in a QVS file specific to the application.
+
+    8. The fields in the transformed data are renamed using the field name mapping table.
+
+    9. The transformed data is stored in a QVD file specific to the application, and the transformed table is dropped from memory.
+
+    10. The script cleans up variables used during the transformation process.
+
+*/
+
+Trace Running: Extract General...;
+Trace Application Name: $(vApplicationName);
+
+//* Left until first underscore Extract Type
+//* Left until Second underscore Source System
+//* Remainder = table / view name (Exact, Caps, etc)
+LET vETLType	    = left(vApplicationName,index(vApplicationName,'_')-1);
+LET vSourceSystem  	= mid(vApplicationName,index(vApplicationName,'_')+1,index(vApplicationName,'_',2)-index(vApplicationName,'_',1)-1);
+LET vTableName 		= mid(vApplicationName,index(vApplicationName,'_',2)+1);
+LET vExtractFile    = 'Extract_' & vSourceSystem & '_' & vTableName & '.qvd';
+
+Trace ETL Type: $(vETLType);
+Trace Source System: $(vSourceSystem);
+Trace Table Name: $(vTableName);
+
+
+
+
+Trace Include ALL Files;
+$(Must_Include='lib://Acorn_Insights/00_Shared/Include_Subroutines/ALL_Includes.qvs')
+
+
+LET vAuditLog_Start = TimeStamp(Now());
+
+
+Trace Read INI Files: config, system and table where avaibible;
+for each _sFileName in  'lib://Acorn_Insights/03_Transform_Procs/# config.ini','lib://Acorn_Insights/01_Transform_Procs/## ' & vSourceSystem & '.ini','lib://Acorn_Insights/03_Transform_Procs/' & vApplicationName & '.ini'
+    call FileExists( _sFileName, bFileExists,0);
+    If not isnull(bFileExists) Then 
+        Trace Reading INI File '$(_sFileName)';
+        call SetParameters( _sFileName)
+    End iF
+next _sFileName
+
+//call DropConfigTables;
+
+// Global Field Name Mapping (This gets Priority!)
+FieldName_MAP_TEMP:
+LOAD
+    Original,
+    New
+FROM [lib://Acorn_Insights/00_Shared/GlobalFieldNameMap.csv]
+(txt, codepage is 28591, embedded labels, delimiter is ',', msq);
+
+
+// Sanitise remaining field names
+Concatenate('FieldName_MAP_TEMP')
+LOAD
+    FieldName as Original,
+    capitalize(Replace(FieldName,'_',' ')) as New
+FROM [$(FromConnection.LIB)$(vExtractFile)]
+(XmlSimple, table is [QvdTableHeader/Fields/QvdFieldHeader]);
+
+
+FieldName_MAP:
+Mapping Load * Resident FieldName_MAP_TEMP;
+
+
+
+// Load Extract File nad Transform. If a qvs is present complete in a proceeding load.
+TRANSFORM:
+$(Include='lib://Acorn_Insights/03_Transform_Procs/$(vApplicationName).qvs')
+Load 
+    * 
+    // Insert any standard transformation here
+From [$(FromConnection.LIB)$(vExtractFile)] (qvd);
+
+
+// Rename Fields. 
+Rename Fields using FieldName_MAP;
+
+
+// Store 
+Store TRANSFORM into [$(ToConnection.LIB)$(vApplicationName).qvd];
+Drop Table TRANSFORM;
+
+
+// Logging
+CALL AuditLog ('$(vCycleStart)','$(vAuditLog_Application)','File','Load','$(FromConnection.LIB)$(vExtractFile)','$(vAuditLog_Start)');
+CALL AuditLog ('$(vCycleStart)','$(vAuditLog_Application)','File','Store','$(ToConnection.LIB)$(vApplicationName).qvd','$(vAuditLog_Start)');
+CALL StoreAuditLog;
+
+
+//Clean Up
+_sFileName = ;
+bFileExists = ;
+vExtractFile =

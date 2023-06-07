@@ -1,0 +1,34 @@
+NominalCodeDesc_MAP:
+Mapping LOAD
+    num([Nominal Code],'0000') as [Nominal Code],  
+    [Nominal Description]
+FROM [lib://Acorn_Insights/00_Shared/Nominal_Code_Mapping.csv] 
+(txt, utf8, embedded labels, delimiter is ',', msq);
+
+
+
+Name_MAP:
+Mapping LOAD
+	[CompanyNo] & '|' & [Account Ref] AS [%ACCOUNT_REF-NOMINAL_CODE],
+	[Name]
+FROM [lib://Acorn_Insights/04_Transform_Data/Transform_Sage_NOMINAL_LEDGER.qvd]
+(qvd);
+
+
+
+
+
+//* ***********************************************************************************
+//! Remember to add any additional files loaded into the logging !!
+//*************************************************************************************
+CALL AuditLog ('$(vCycleStart)','$(vAuditLog_Application)','File','Load','lib://Acorn_Insights/00_Shared/Nominal_Code_Mapping.csv','$(vAuditLog_Start)');
+CALL AuditLog ('$(vCycleStart)','$(vAuditLog_Application)','File','Load','lib://Acorn_Insights/04_Transform_Data/Transform_Sage_NOMINAL_LEDGER.qvd','$(vAuditLog_Start)');
+
+
+TRANSFORM:
+Load 
+    *
+    ,ApplyMap('Name_MAP',[CompanyNo] & '|' & [NOMINAL_CODE] ,'NA')	    AS [Nominal Name]
+    ,ApplyMap('NominalCodeDesc_MAP',[NOMINAL_CODE],'NA')                AS [Nominal Description]
+   
+;
